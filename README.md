@@ -52,12 +52,13 @@ uv run python 'main.py'
 ```
 
 When video is enabled, `main.py` subscribes to the Unitree camera feed and
-attaches the latest camera frame as a JPEG image to each user prompt sent to
-Gemini Live. This keeps the CLI responsive while still giving Gemini fresh
-robot vision context.
+forwards JPEG frames to Gemini Live continuously for the whole session with
+`send_realtime_input(video=...)`, capped by `ROBOT_VIDEO_FPS` (max `1.0` as
+recommended by Gemini Live docs). User prompts are still sent as normal text
+turns.
 
-If you set `ROBOT_VIDEO_DEBUG_DIR`, the bridge also saves the exact JPEG frames
-it forwards to Gemini so you can verify what the model actually received.
+If you set `ROBOT_VIDEO_DEBUG_DIR`, the bridge saves the exact JPEG frames it
+forwards to Gemini so you can verify what the model actually received.
 
 By default the CLI stays quiet while you type. Set `ROBOT_DEBUG='true'` to show
 tool calls, Live API message payloads, and per-frame forwarding logs.

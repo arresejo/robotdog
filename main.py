@@ -536,7 +536,7 @@ def build_live_config() -> types.LiveConnectConfig:
         tools=build_tools(),
         system_instruction=(
             "You are controlling a Unitree robot through a narrow tool interface. "
-            "You may receive recent camera images from the robot. "
+            "You may receive a continuous stream of camera images from the robot. "
             "Use that visual context when it helps you answer or decide what to do next. "
             "Only use the provided tools for direct robot actions. "
             "The robot connection is managed automatically. "
@@ -691,6 +691,68 @@ async def handle_model_turn(
     return "".join(chunks).strip(), streamed_output
 
 
+async def stream_video_realtime_to_gemini(session: Any, controller: RobotController) -> None:
+    if (
+        not controller.connected
+        or controller._config.dry_run
+        or not controller._config.video_enabled
+    ):
+        return
+
+    frame_interval_seconds = 1.0 / controller._config.video_fps
+    last_forwarded_sequence = 0
+    debug_dir = controller._config.video_debug_dir
+    if debug_dir is not None:
+        debug_dir.mkdir(parents=True, exist_ok=True)
+
+    while True:
+        got_frame = await controller.wait_for_video_frame(timeout=2.0)
+        if not got_frame:
+            _debug_log(
+                controller._config.debug,
+                "Robot video stream did not produce a frame for realtime forwarding.",
+            )
+            await asyncio.sleep(frame_interval_seconds)
+            continue
+
+        metadata = controller.latest_video_frame_metadata()
+        sequence = int(metadata["sequence"])
+        if sequence <= last_forwarded_sequence:
+            await asyncio.sleep(frame_interval_seconds)
+            continue
+
+        jpeg_bytes = await controller.get_latest_video_frame_jpeg()
+        if not jpeg_bytes:
+            await asyncio.sleep(frame_interval_seconds)
+            continue
+
+        await session.send_realtime_input(
+            video=types.Blob(data=jpeg_bytes, mime_type="image/jpeg")
+        )
+        last_forwarded_sequence = sequence
+        if controller._config.debug:
+            print(
+                "Forwarded realtime robot frame:",
+                json.dumps(
+                    {
+                        "sequence": sequence,
+                        "shape": metadata["shape"],
+                        "age_ms": round(
+                            max(0.0, time.time() - float(metadata["received_at"])) * 1000,
+                            1,
+                        ),
+                        "jpeg_bytes": len(jpeg_bytes),
+                    },
+                    ensure_ascii=True,
+                ),
+            )
+        if debug_dir is not None:
+            debug_path = debug_dir / f"frame_{sequence:06d}.jpg"
+            await asyncio.to_thread(_write_bytes, debug_path, jpeg_bytes)
+
+        await asyncio.sleep(frame_interval_seconds)
+
+
 async def build_user_turn_parts(
     controller: RobotController,
     user_input: str,
@@ -705,16 +767,13 @@ async def build_user_turn_parts(
                 "Robot video stream did not produce a frame before prompt.",
             )
         else:
-            debug_dir = controller._config.video_debug_dir
-            if debug_dir is not None:
-                debug_dir.mkdir(parents=True, exist_ok=True)
             jpeg_bytes = await controller.get_latest_video_frame_jpeg()
             if jpeg_bytes:
                 metadata = controller.latest_video_frame_metadata()
                 parts.append(types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg"))
                 if controller._config.debug:
                     print(
-                        "Attached robot frame to user turn:",
+                        "Included latest robot frame with user turn:",
                         json.dumps(
                             {
                                 "sequence": metadata["sequence"],
@@ -729,9 +788,6 @@ async def build_user_turn_parts(
                             ensure_ascii=True,
                         ),
                     )
-                if debug_dir is not None:
-                    debug_path = debug_dir / f"frame_{int(metadata['sequence']):06d}.jpg"
-                    await asyncio.to_thread(_write_bytes, debug_path, jpeg_bytes)
 
     parts.append(types.Part(text=user_input))
     return parts
@@ -760,35 +816,52 @@ async def repl() -> None:
         print("Gemini session started.")
         print("Type a request and press Enter.")
         print("Type 'exit' to quit.")
-
-        while True:
-            user_input = await asyncio.to_thread(input, "\nYou: ")
-            if user_input.strip().lower() in {"exit", "quit"}:
-                break
-            if not user_input.strip():
-                continue
-
-            turn_parts = await build_user_turn_parts(controller, user_input)
-            await session.send_client_content(
-                turns=types.Content(
-                    role="user",
-                    parts=turn_parts,
-                ),
-                turn_complete=True,
+        video_stream_task: asyncio.Task[None] | None = None
+        if controller.connected and controller._config.video_enabled:
+            video_stream_task = asyncio.create_task(
+                stream_video_realtime_to_gemini(session, controller)
             )
-            try:
-                response_text, streamed_output = await asyncio.wait_for(
-                    handle_model_turn(session, controller),
-                    timeout=TURN_RESPONSE_TIMEOUT_SECONDS,
+
+        try:
+            while True:
+                if video_stream_task and video_stream_task.done():
+                    task_error = video_stream_task.exception()
+                    if task_error is not None:
+                        print(f"Realtime video forwarding stopped: {task_error}")
+                    break
+
+                user_input = await asyncio.to_thread(input, "\nYou: ")
+                if user_input.strip().lower() in {"exit", "quit"}:
+                    break
+                if not user_input.strip():
+                    continue
+
+                turn_parts = await build_user_turn_parts(controller, user_input)
+                await session.send_client_content(
+                    turns=types.Content(
+                        role="user",
+                        parts=turn_parts,
+                    ),
+                    turn_complete=True,
                 )
-            except TimeoutError:
-                print("Gemini timed out waiting for a turn response.")
-                break
-            except APIError as exc:
-                print(f"Gemini session error: {exc}")
-                break
-            if response_text and not streamed_output:
-                print(f"Gemini: {response_text}")
+                try:
+                    response_text, streamed_output = await asyncio.wait_for(
+                        handle_model_turn(session, controller),
+                        timeout=TURN_RESPONSE_TIMEOUT_SECONDS,
+                    )
+                except TimeoutError:
+                    print("Gemini timed out waiting for a turn response.")
+                    break
+                except APIError as exc:
+                    print(f"Gemini session error: {exc}")
+                    break
+                if response_text and not streamed_output:
+                    print(f"Gemini: {response_text}")
+        finally:
+            if video_stream_task is not None:
+                video_stream_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await video_stream_task
 
     if controller.connected:
         with suppress(Exception):
