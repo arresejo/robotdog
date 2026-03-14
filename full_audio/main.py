@@ -3,6 +3,8 @@ import base64
 import json
 import logging
 import os
+import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -10,6 +12,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from gemini_live import GeminiLive
+
+# Add parent directory to path to import robot_bridge
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from robot_bridge import (
+    RobotConfig,
+    RobotController,
+    configure_unitree_sdk_output,
+    build_robot_tools,
+    build_robot_tool_mapping,
+)
 
 # Load environment variables
 load_dotenv()
@@ -21,6 +33,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL = os.getenv("MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
+ROBOT_ENABLED = os.getenv("ROBOT_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
 # Initialize FastAPI
 app = FastAPI()
@@ -44,10 +57,31 @@ async def root():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for Gemini Live."""
+    """WebSocket endpoint for Gemini Live with robot control."""
     await websocket.accept()
 
     logger.info("WebSocket connection accepted")
+
+    robot_controller = None
+    robot_tools = []
+    robot_tool_mapping = {}
+
+    if ROBOT_ENABLED:
+        try:
+            robot_config = RobotConfig.from_env()
+            configure_unitree_sdk_output(robot_config.debug)
+            if not robot_config.debug:
+                logging.getLogger("aiortc").setLevel(logging.ERROR)
+            
+            robot_controller = RobotController(robot_config)
+            connection_result = await robot_controller.ensure_connected()
+            logger.info(f"Robot: {connection_result['message']}")
+            
+            robot_tools = build_robot_tools()
+            robot_tool_mapping = build_robot_tool_mapping(robot_controller)
+        except Exception as e:
+            logger.error(f"Failed to initialize robot controller: {e}")
+            robot_controller = None
 
     audio_input_queue = asyncio.Queue()
     video_input_queue = asyncio.Queue()
@@ -57,11 +91,14 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.send_bytes(data)
 
     async def audio_interrupt_callback():
-        # The event queue handles the JSON message, but we might want to do something else here
         pass
 
     gemini_client = GeminiLive(
-        api_key=GEMINI_API_KEY, model=MODEL, input_sample_rate=16000
+        api_key=GEMINI_API_KEY,
+        model=MODEL,
+        input_sample_rate=16000,
+        tools=robot_tools,
+        tool_mapping=robot_tool_mapping,
     )
 
     async def receive_from_client():
@@ -100,7 +137,6 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_interrupt_callback=audio_interrupt_callback,
         ):
             if event:
-                # Forward events (transcriptions, etc) to client
                 await websocket.send_json(event)
 
     try:
@@ -109,7 +145,14 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"Error in Gemini session: {e}")
     finally:
         receive_task.cancel()
-        # Ensure websocket is closed if not already
+        
+        if robot_controller and robot_controller.connected:
+            try:
+                await robot_controller.disconnect()
+                logger.info("Robot disconnected")
+            except Exception as e:
+                logger.error(f"Error disconnecting robot: {e}")
+        
         try:
             await websocket.close()
         except:

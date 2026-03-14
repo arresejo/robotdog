@@ -29,11 +29,11 @@ const geminiClient = new GeminiClient({
 
     // Send hidden instruction
     geminiClient.sendText(
-      `System: Introduce yourself as a demo of the Gemini Live API.
-       Suggest playing with features like the native audio for accents, multilingual support,
-        proactive audio by asking you not to speak until I say something specific,
-        or the affective audio capabilities by changing the emotion in your voice to
-        match the tone of the conversation. Keep the intro concise and friendly.`
+      `System: You are now connected to control a Unitree robot dog. 
+       The user can give you voice commands to control the robot.
+       Introduce yourself briefly as the robot control assistant and mention 
+       that you're ready to help control the robot dog with commands like 
+       'stand up', 'sit down', 'move forward', or 'say hello'. Keep it short and friendly.`
     );
   },
   onMessage: (event) => {

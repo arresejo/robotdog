@@ -3,13 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Gemini Live API Demo</title>
+    <title>Robot Dog Voice Control</title>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
     <div class="container">
       <header>
-        <h1>Gemini Live API Demo</h1>
+        <h1>Robot Dog Voice Control</h1>
         <div style="display: flex; gap: 10px; align-items: center">
           <div id="status" class="status disconnected">Disconnected</div>
         </div>
@@ -27,28 +27,25 @@
               text-align: left;
             "
           >
-            <h3>Features Enabled:</h3>
-            <ul style="margin: 10px 0 20px 20px">
-              <li>
-                <strong>Native Audio:</strong> Low latency voice interaction
-              </li>
-              <li>
-                <strong>Multilingual:</strong> Speak in different languages
-              </li>
-              <li>
-                <strong>Proactive Audio:</strong> Gemini can initiate speech
-                based on instructions E.g. "Only talk when I mention food"
-              </li>
-              <li><strong>Affective Audio:</strong> Emotional tone matching</li>
+            <h3>Voice-Controlled Robot Dog</h3>
+            <p style="margin: 10px 0">
+              Control a Unitree robot dog using natural voice commands through Gemini Live API.
+            </p>
+            <h4>Supported Commands:</h4>
+            <ul style="margin: 10px 0 10px 20px">
+              <li><strong>Hello</strong> - Wave gesture</li>
+              <li><strong>Stand up</strong> - Stand position</li>
+              <li><strong>Sit down</strong> - Sit position</li>
+              <li><strong>Move forward</strong> - Walk forward</li>
+              <li><strong>Move backward</strong> - Walk backward</li>
+              <li><strong>Turn left / Turn right</strong> - Rotate</li>
+              <li><strong>Stop</strong> - Stop all motion</li>
             </ul>
-            <p>
-              <em
-                >Note: When you connect, the app sends a text message to Gemini
-                instructing it to introduce itself and these features.</em
-              >
+            <p style="margin: 10px 0">
+              <em>Tip: Use your microphone for voice commands or type text messages.</em>
             </p>
           </div>
-          <p>Click below to connect.</p>
+          <p>Click below to connect and start controlling the robot.</p>
           <button id="connectBtn" class="btn">Connect</button>
         </div>
 

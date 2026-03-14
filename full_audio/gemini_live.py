@@ -29,6 +29,24 @@ class GeminiLive:
         self.tool_mapping = tool_mapping or {}
 
     async def start_session(self, audio_input_queue, video_input_queue, text_input_queue, audio_output_callback, audio_interrupt_callback=None):
+        system_instruction_text = "You are a helpful AI assistant."
+        
+        if self.tools:
+            system_instruction_text = (
+                "You are controlling a Unitree robot dog through voice commands and can see through the user's camera or screen. "
+                "You have access to robot control tools for basic movement and gestures. "
+                "Listen carefully to voice commands and execute them using the appropriate robot control functions. "
+                "Keep motion commands conservative and safe. Always confirm actions with brief, friendly responses. "
+                "If asked to do something outside your capabilities, explain the limitation clearly. "
+                "You can see real-time video from the user's camera or screen sharing, which helps you understand context."
+            )
+        else:
+            system_instruction_text = (
+                "You are a helpful AI assistant. Keep your responses concise. "
+                "Speak in a friendly Irish accent. You can see the user's camera or screen "
+                "which is shared as realtime input images with you."
+            )
+        
         config = types.LiveConnectConfig(
             response_modalities=[types.Modality.AUDIO],
             speech_config=types.SpeechConfig(
@@ -38,7 +56,7 @@ class GeminiLive:
                     )
                 )
             ),
-            system_instruction=types.Content(parts=[types.Part(text="You are a helpful AI assistant. Keep your responses concise. Speak in a friendly Irish accent. You can see the user's camera or screen which is shared as realtime input images with you.")]),
+            system_instruction=types.Content(parts=[types.Part(text=system_instruction_text)]),
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
             proactivity=types.ProactivityConfig(proactive_audio=True),
