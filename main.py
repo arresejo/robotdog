@@ -10,6 +10,15 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+# Load .env file if present
+_env_file = Path(__file__).resolve().parent / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
+
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
@@ -75,12 +84,22 @@ def _sanitize_live_message_for_logging(payload: Any) -> Any:
     return payload
 
 
-async def play_audio_chunk(audio_bytes: bytes, mime_type: str | None) -> None:
+async def play_audio_chunk(
+    audio_bytes: bytes,
+    mime_type: str | None,
+    controller: RobotController | None = None,
+) -> None:
     if not audio_bytes:
         return
 
     sample_rate = _pcm_sample_rate_from_mime_type(mime_type)
 
+    # Route to robot speaker when connected and play_audio enabled
+    if controller and controller.connected and controller._config.play_audio:
+        await controller.play_audio_on_robot(audio_bytes, sample_rate)
+        return
+
+    # Fallback: play locally via afplay
     def write_wav_file() -> str:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
             tmp_path = tmp_file.name
@@ -161,6 +180,7 @@ async def handle_model_turn(
                         await play_audio_chunk(
                             audio_bytes=part.inline_data.data,
                             mime_type=part.inline_data.mime_type,
+                            controller=controller,
                         )
         if message.text:
             chunks.append(message.text)
