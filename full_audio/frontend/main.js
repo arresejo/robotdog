@@ -1,36 +1,46 @@
 // --- Main Application Logic ---
 
-const statusDiv = document.getElementById("status");
-const authSection = document.getElementById("auth-section");
-const appSection = document.getElementById("app-section");
+const statusDiv       = document.getElementById("status");
+const statusText      = statusDiv.querySelector(".status-text");
+const authSection     = document.getElementById("auth-section");
+const appSection      = document.getElementById("app-section");
 const sessionEndSection = document.getElementById("session-end-section");
-const restartBtn = document.getElementById("restartBtn");
-const micBtn = document.getElementById("micBtn");
-const robotCameraBtn = document.getElementById("robotCameraBtn");
-const cameraBtn = document.getElementById("cameraBtn");
-const screenBtn = document.getElementById("screenBtn");
-const disconnectBtn = document.getElementById("disconnectBtn");
-const textInput = document.getElementById("textInput");
-const sendBtn = document.getElementById("sendBtn");
-const videoPreview = document.getElementById("video-preview");
+const restartBtn      = document.getElementById("restartBtn");
+const micBtn          = document.getElementById("micBtn");
+const micLabel        = micBtn.querySelector(".ctrl-btn-label");
+const robotCameraBtn  = document.getElementById("robotCameraBtn");
+const robotCamLabel   = robotCameraBtn.querySelector(".ctrl-btn-label");
+const cameraBtn       = document.getElementById("cameraBtn");
+const cameraLabel     = cameraBtn.querySelector(".ctrl-btn-label");
+const screenBtn       = document.getElementById("screenBtn");
+const screenLabel     = screenBtn.querySelector(".ctrl-btn-label");
+const disconnectBtn   = document.getElementById("disconnectBtn");
+const textInput       = document.getElementById("textInput");
+const sendBtn         = document.getElementById("sendBtn");
+const videoPreview    = document.getElementById("video-preview");
 const videoPlaceholder = document.getElementById("video-placeholder");
 const robotVideoCanvas = document.getElementById("robot-video-canvas");
-const connectBtn = document.getElementById("connectBtn");
-const chatLog = document.getElementById("chat-log");
+const connectBtn      = document.getElementById("connectBtn");
+const chatLog         = document.getElementById("chat-log");
+const liveBadge       = document.getElementById("live-badge");
 
 let currentGeminiMessageDiv = null;
-let currentUserMessageDiv = null;
-let showingRobotCamera = false;
+let currentUserMessageDiv   = null;
+let showingRobotCamera      = false;
+
+function setStatus(text, cls) {
+  statusText.textContent = text;
+  statusDiv.className = `status ${cls}`;
+}
 
 const mediaHandler = new MediaHandler();
 const geminiClient = new GeminiClient({
   onOpen: () => {
-    statusDiv.textContent = "Connected";
-    statusDiv.className = "status connected";
+    setStatus("Connected", "connected");
     authSection.classList.add("hidden");
     appSection.classList.remove("hidden");
+    liveBadge.classList.add("active");
 
-    // Send hidden instruction
     geminiClient.sendText(
       `System: You are now connected to control a Unitree robot dog. 
        The user can give you voice commands to control the robot.
@@ -48,36 +58,31 @@ const geminiClient = new GeminiClient({
         console.error("Parse error:", e);
       }
     } else {
-      // Binary data (audio response from Gemini)
       mediaHandler.playAudio(event.data);
     }
   },
   onClose: (e) => {
     console.log("WS Closed:", e);
-    statusDiv.textContent = "Disconnected";
-    statusDiv.className = "status disconnected";
+    setStatus("Disconnected", "disconnected");
+    liveBadge.classList.remove("active");
     showSessionEnd();
   },
   onError: (e) => {
     console.error("WS Error:", e);
-    statusDiv.textContent = "Connection Error";
-    statusDiv.className = "status error";
+    setStatus("Connection Error", "error");
   },
 });
 
 function handleJsonMessage(msg) {
   if (msg.type === "robot_video_frame") {
-    // Handle robot video frame
-    if (showingRobotCamera) {
-      displayRobotVideoFrame(msg.data);
-    }
+    if (showingRobotCamera) displayRobotVideoFrame(msg.data);
   } else if (msg.type === "interrupted") {
     mediaHandler.stopAudioPlayback();
     currentGeminiMessageDiv = null;
-    currentUserMessageDiv = null;
+    currentUserMessageDiv   = null;
   } else if (msg.type === "turn_complete") {
     currentGeminiMessageDiv = null;
-    currentUserMessageDiv = null;
+    currentUserMessageDiv   = null;
   } else if (msg.type === "user") {
     if (currentUserMessageDiv) {
       currentUserMessageDiv.textContent += msg.text;
@@ -93,8 +98,7 @@ function handleJsonMessage(msg) {
       currentGeminiMessageDiv = appendMessage("gemini", msg.text);
     }
   } else if (msg.type === "tool_call") {
-    // Display tool execution
-    appendMessage("system", `🤖 Executing: ${msg.name}`);
+    appendMessage("system", `🤖 ${msg.name}`);
   }
 }
 
@@ -102,29 +106,23 @@ function displayRobotVideoFrame(base64Data) {
   const img = new Image();
   img.onload = () => {
     const ctx = robotVideoCanvas.getContext("2d");
-    robotVideoCanvas.width = img.width;
+    robotVideoCanvas.width  = img.width;
     robotVideoCanvas.height = img.height;
     ctx.drawImage(img, 0, 0);
-    
-    // Copy to video preview canvas for display
-    const videoCtx = videoPreview.getContext ? null : document.getElementById("video-canvas").getContext("2d");
-    if (videoCtx) {
-      const canvas = document.getElementById("video-canvas");
-      canvas.width = img.width;
-      canvas.height = img.height;
-      videoCtx.drawImage(img, 0, 0);
-    }
-    
-    // Update video preview by drawing on it
-    videoPreview.style.display = "none";
-    robotVideoCanvas.style.display = "block";
-    robotVideoCanvas.style.width = "100%";
-    robotVideoCanvas.style.height = "auto";
+
+    videoPreview.style.display      = "none";
+    robotVideoCanvas.style.display  = "block";
+    robotVideoCanvas.style.width    = "100%";
+    robotVideoCanvas.style.height   = "auto";
   };
   img.src = "data:image/jpeg;base64," + base64Data;
 }
 
 function appendMessage(type, text) {
+  // Remove empty-state placeholder on first message
+  const emptyState = chatLog.querySelector(".chat-empty-state");
+  if (emptyState) emptyState.remove();
+
   const msgDiv = document.createElement("div");
   msgDiv.className = `message ${type}`;
   msgDiv.textContent = text;
@@ -133,167 +131,160 @@ function appendMessage(type, text) {
   return msgDiv;
 }
 
-// Connect Button Handler
+// ─── Connect ───────────────────────────────────────────
 connectBtn.onclick = async () => {
-  statusDiv.textContent = "Connecting...";
+  setStatus("Connecting…", "disconnected");
   connectBtn.disabled = true;
 
   try {
-    // Initialize audio context on user gesture
     await mediaHandler.initializeAudio();
-
     geminiClient.connect();
   } catch (error) {
     console.error("Connection error:", error);
-    statusDiv.textContent = "Connection Failed: " + error.message;
-    statusDiv.className = "status error";
+    setStatus("Connection Failed", "error");
     connectBtn.disabled = false;
   }
 };
 
-// UI Controls
-disconnectBtn.onclick = () => {
-  geminiClient.disconnect();
-};
+// ─── Disconnect ────────────────────────────────────────
+disconnectBtn.onclick = () => geminiClient.disconnect();
 
+// ─── Microphone ────────────────────────────────────────
 micBtn.onclick = async () => {
   if (mediaHandler.isRecording) {
     mediaHandler.stopAudio();
-    micBtn.textContent = "Start Mic";
+    micLabel.textContent = "Mic";
+    micBtn.classList.remove("recording");
   } else {
     try {
       await mediaHandler.startAudio((data) => {
-        if (geminiClient.isConnected()) {
-          geminiClient.send(data);
-        }
+        if (geminiClient.isConnected()) geminiClient.send(data);
       });
-      micBtn.textContent = "Stop Mic";
+      micLabel.textContent = "Stop Mic";
+      micBtn.classList.add("recording");
     } catch (e) {
       alert("Could not start audio capture");
     }
   }
 };
 
+// ─── Robot Camera ──────────────────────────────────────
 robotCameraBtn.onclick = () => {
   if (showingRobotCamera) {
-    // Stop showing robot camera
     showingRobotCamera = false;
-    robotCameraBtn.textContent = "Show Robot Camera";
+    robotCamLabel.textContent = "Robot Cam";
+    robotCameraBtn.classList.remove("active");
     robotVideoCanvas.style.display = "none";
-    videoPreview.style.display = "block";
+    videoPreview.style.display     = "block";
     videoPlaceholder.classList.remove("hidden");
+    liveBadge.classList.remove("active");
   } else {
-    // Show robot camera
     showingRobotCamera = true;
-    robotCameraBtn.textContent = "Hide Robot Camera";
+    robotCamLabel.textContent = "Hide Cam";
+    robotCameraBtn.classList.add("active");
     videoPlaceholder.classList.add("hidden");
-    
-    // Stop any browser video streams
+    liveBadge.classList.add("active");
+
     if (mediaHandler.videoStream) {
       mediaHandler.stopVideo(videoPreview);
-      cameraBtn.textContent = "Browser Camera";
-      screenBtn.textContent = "Share Screen";
+      cameraLabel.textContent = "Camera";
+      screenLabel.textContent = "Screen";
+      cameraBtn.classList.remove("active");
+      screenBtn.classList.remove("active");
     }
-    
-    // Robot frames will now be displayed via handleJsonMessage
+
     robotVideoCanvas.style.display = "block";
-    videoPreview.style.display = "none";
+    videoPreview.style.display     = "none";
   }
 };
 
+// ─── Browser Camera ────────────────────────────────────
 cameraBtn.onclick = async () => {
-  if (cameraBtn.textContent === "Stop Browser Camera") {
+  if (cameraBtn.classList.contains("active")) {
     mediaHandler.stopVideo(videoPreview);
-    cameraBtn.textContent = "Browser Camera";
-    screenBtn.textContent = "Share Screen";
-    if (!showingRobotCamera) {
-      videoPlaceholder.classList.remove("hidden");
-    }
+    cameraLabel.textContent = "Camera";
+    cameraBtn.classList.remove("active");
+    screenBtn.classList.remove("active");
+    if (!showingRobotCamera) videoPlaceholder.classList.remove("hidden");
   } else {
-    // Stop robot camera if showing
     if (showingRobotCamera) {
       showingRobotCamera = false;
-      robotCameraBtn.textContent = "Show Robot Camera";
+      robotCamLabel.textContent = "Robot Cam";
+      robotCameraBtn.classList.remove("active");
       robotVideoCanvas.style.display = "none";
     }
-    
-    // If screen share is active, stop it first
+
     if (mediaHandler.videoStream) {
       mediaHandler.stopVideo(videoPreview);
-      screenBtn.textContent = "Share Screen";
+      screenLabel.textContent = "Screen";
+      screenBtn.classList.remove("active");
     }
 
     try {
       await mediaHandler.startVideo(videoPreview, (base64Data) => {
-        if (geminiClient.isConnected()) {
-          geminiClient.sendImage(base64Data);
-        }
+        if (geminiClient.isConnected()) geminiClient.sendImage(base64Data);
       });
-      cameraBtn.textContent = "Stop Browser Camera";
-      screenBtn.textContent = "Share Screen";
+      cameraLabel.textContent = "Stop Camera";
+      cameraBtn.classList.add("active");
       videoPreview.style.display = "block";
       videoPlaceholder.classList.add("hidden");
+      liveBadge.classList.add("active");
     } catch (e) {
       alert("Could not access camera");
     }
   }
 };
 
+// ─── Screen Share ──────────────────────────────────────
 screenBtn.onclick = async () => {
-  if (screenBtn.textContent === "Stop Sharing") {
+  if (screenBtn.classList.contains("active")) {
     mediaHandler.stopVideo(videoPreview);
-    screenBtn.textContent = "Share Screen";
-    cameraBtn.textContent = "Browser Camera";
-    if (!showingRobotCamera) {
-      videoPlaceholder.classList.remove("hidden");
-    }
+    screenLabel.textContent = "Screen";
+    screenBtn.classList.remove("active");
+    if (!showingRobotCamera) videoPlaceholder.classList.remove("hidden");
   } else {
-    // Stop robot camera if showing
     if (showingRobotCamera) {
       showingRobotCamera = false;
-      robotCameraBtn.textContent = "Show Robot Camera";
+      robotCamLabel.textContent = "Robot Cam";
+      robotCameraBtn.classList.remove("active");
       robotVideoCanvas.style.display = "none";
     }
-    
-    // If camera is active, stop it first
+
     if (mediaHandler.videoStream) {
       mediaHandler.stopVideo(videoPreview);
-      cameraBtn.textContent = "Browser Camera";
+      cameraLabel.textContent = "Camera";
+      cameraBtn.classList.remove("active");
     }
 
     try {
       await mediaHandler.startScreen(
         videoPreview,
         (base64Data) => {
-          if (geminiClient.isConnected()) {
-            geminiClient.sendImage(base64Data);
-          }
+          if (geminiClient.isConnected()) geminiClient.sendImage(base64Data);
         },
         () => {
-          // onEnded callback (e.g. user stopped sharing from browser)
-          screenBtn.textContent = "Share Screen";
-          if (!showingRobotCamera) {
-            videoPlaceholder.classList.remove("hidden");
-          }
+          screenLabel.textContent = "Screen";
+          screenBtn.classList.remove("active");
+          if (!showingRobotCamera) videoPlaceholder.classList.remove("hidden");
         }
       );
-      screenBtn.textContent = "Stop Sharing";
-      cameraBtn.textContent = "Browser Camera";
+      screenLabel.textContent = "Stop Screen";
+      screenBtn.classList.add("active");
       videoPreview.style.display = "block";
       videoPlaceholder.classList.add("hidden");
+      liveBadge.classList.add("active");
     } catch (e) {
       alert("Could not share screen");
     }
   }
 };
 
+// ─── Text Input ────────────────────────────────────────
 sendBtn.onclick = sendText;
-textInput.onkeypress = (e) => {
-  if (e.key === "Enter") sendText();
-};
+textInput.onkeypress = (e) => { if (e.key === "Enter") sendText(); };
 
 function sendText() {
-  const text = textInput.value;
+  const text = textInput.value.trim();
   if (text && geminiClient.isConnected()) {
     geminiClient.sendText(text);
     appendMessage("user", text);
@@ -301,6 +292,7 @@ function sendText() {
   }
 }
 
+// ─── Reset ────────────────────────────────────────────
 function resetUI() {
   authSection.classList.remove("hidden");
   appSection.classList.add("hidden");
@@ -309,16 +301,36 @@ function resetUI() {
   mediaHandler.stopAudio();
   mediaHandler.stopVideo(videoPreview);
   videoPlaceholder.classList.remove("hidden");
-  
+
   showingRobotCamera = false;
   robotVideoCanvas.style.display = "none";
-  videoPreview.style.display = "block";
+  videoPreview.style.display     = "block";
 
-  micBtn.textContent = "Start Mic";
-  robotCameraBtn.textContent = "Show Robot Camera";
-  cameraBtn.textContent = "Browser Camera";
-  screenBtn.textContent = "Share Screen";
-  chatLog.innerHTML = "";
+  micLabel.textContent      = "Mic";
+  robotCamLabel.textContent = "Robot Cam";
+  cameraLabel.textContent   = "Camera";
+  screenLabel.textContent   = "Screen";
+  micBtn.classList.remove("recording");
+  robotCameraBtn.classList.remove("active");
+  cameraBtn.classList.remove("active");
+  screenBtn.classList.remove("active");
+  liveBadge.classList.remove("active");
+
+  // Restore empty state in chat
+  chatLog.innerHTML = `
+    <div class="chat-empty-state">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <path d="M16 0C16 8.837 8.837 16 0 16C8.837 16 16 23.163 16 32C16 23.163 23.163 16 32 16C23.163 16 16 8.837 16 0Z" fill="url(#empty-grad2)" opacity="0.5"/>
+        <defs>
+          <linearGradient id="empty-grad2" x1="0" y1="0" x2="32" y2="32">
+            <stop offset="0%" stop-color="#4285F4"/>
+            <stop offset="100%" stop-color="#9B72F8"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <span>Conversation will appear here</span>
+    </div>`;
+
   connectBtn.disabled = false;
 }
 
@@ -329,6 +341,4 @@ function showSessionEnd() {
   mediaHandler.stopVideo(videoPreview);
 }
 
-restartBtn.onclick = () => {
-  resetUI();
-};
+restartBtn.onclick = () => resetUI();
