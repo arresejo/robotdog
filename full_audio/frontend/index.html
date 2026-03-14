@@ -58,15 +58,19 @@
           <div class="app-grid">
             <div class="left-panel">
               <div class="video-container">
-                <div id="video-placeholder">Start camera to send video</div>
+                <div id="video-placeholder">Robot camera feed will appear here</div>
                 <video id="video-preview" autoplay playsinline muted></video>
                 <canvas id="video-canvas" style="display: none"></canvas>
+                <canvas id="robot-video-canvas" style="display: none"></canvas>
               </div>
 
               <div class="controls">
                 <button id="micBtn" class="btn icon-btn">Start Mic</button>
+                <button id="robotCameraBtn" class="btn icon-btn">
+                  Show Robot Camera
+                </button>
                 <button id="cameraBtn" class="btn icon-btn">
-                  Start Camera
+                  Browser Camera
                 </button>
                 <button id="screenBtn" class="btn icon-btn">
                   Share Screen

@@ -62,8 +62,9 @@ Open your browser and navigate to:
 
 - **Voice Control**: Use your microphone to issue natural language commands to the robot
 - **Real-time Audio Streaming**: Low-latency bi-directional audio via Gemini Live API
+- **Robot Camera Feed**: Robot's camera view is streamed to Gemini for visual context
 - **Robot Control Tools**: Backend Gemini tools execute actual robot commands
-- **Optional Video**: Can share camera or screen for visual context
+- **Optional Browser Video**: Can also share browser camera or screen for additional context
 - **Text Input**: Alternative to voice commands
 
 ## Supported Robot Commands
@@ -95,10 +96,16 @@ Say any of these commands naturally:
 ## How It Works
 
 1. **Audio Input**: Browser captures microphone audio at 16kHz PCM and streams it via WebSocket
-2. **Gemini Processing**: Backend forwards audio to Gemini Live API for speech recognition and intent understanding
-3. **Tool Execution**: When Gemini detects a robot command, it calls the corresponding tool function
-4. **Robot Control**: Backend executes the command via Unitree WebRTC connection
-5. **Audio Response**: Gemini's voice response streams back to the browser for playback
+2. **Robot Video**: Robot's camera feed (if enabled) is continuously captured and sent to Gemini
+3. **Gemini Processing**: Backend forwards audio and video to Gemini Live API for speech recognition, visual understanding, and intent analysis
+4. **Tool Execution**: When Gemini detects a robot command, it calls the corresponding tool function
+5. **Robot Control**: Backend executes the command via Unitree WebRTC connection
+6. **Audio Response**: Gemini's voice response streams back to the browser for playback
+
+### Video Inputs
+The system supports two video sources:
+- **Robot Camera** (server-side): Streams from robot's onboard camera to Gemini (~1 FPS)
+- **Browser Camera/Screen** (client-side): Optional additional visual context from user's device
 
 ## Safety Features
 
@@ -106,6 +113,7 @@ Say any of these commands naturally:
 - Duration limits prevent extended unsafe motion (max 3 seconds)
 - Robot automatically switches to "normal" motion mode before movement
 - Dry run mode available for testing without actual robot connection
+- Video streaming can be disabled if not needed (`ROBOT_VIDEO_DISABLED=true`)
 
 ## Development
 
@@ -125,3 +133,4 @@ This will show:
 - Tool call invocations
 - Command execution results
 - WebRTC communication logs
+- Robot video frame forwarding (sequence number, size, etc.)

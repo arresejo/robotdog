@@ -6,6 +6,7 @@ const appSection = document.getElementById("app-section");
 const sessionEndSection = document.getElementById("session-end-section");
 const restartBtn = document.getElementById("restartBtn");
 const micBtn = document.getElementById("micBtn");
+const robotCameraBtn = document.getElementById("robotCameraBtn");
 const cameraBtn = document.getElementById("cameraBtn");
 const screenBtn = document.getElementById("screenBtn");
 const disconnectBtn = document.getElementById("disconnectBtn");
@@ -13,11 +14,13 @@ const textInput = document.getElementById("textInput");
 const sendBtn = document.getElementById("sendBtn");
 const videoPreview = document.getElementById("video-preview");
 const videoPlaceholder = document.getElementById("video-placeholder");
+const robotVideoCanvas = document.getElementById("robot-video-canvas");
 const connectBtn = document.getElementById("connectBtn");
 const chatLog = document.getElementById("chat-log");
 
 let currentGeminiMessageDiv = null;
 let currentUserMessageDiv = null;
+let showingRobotCamera = false;
 
 const mediaHandler = new MediaHandler();
 const geminiClient = new GeminiClient({
@@ -45,6 +48,7 @@ const geminiClient = new GeminiClient({
         console.error("Parse error:", e);
       }
     } else {
+      // Binary data (audio response from Gemini)
       mediaHandler.playAudio(event.data);
     }
   },
@@ -62,7 +66,12 @@ const geminiClient = new GeminiClient({
 });
 
 function handleJsonMessage(msg) {
-  if (msg.type === "interrupted") {
+  if (msg.type === "robot_video_frame") {
+    // Handle robot video frame
+    if (showingRobotCamera) {
+      displayRobotVideoFrame(msg.data);
+    }
+  } else if (msg.type === "interrupted") {
     mediaHandler.stopAudioPlayback();
     currentGeminiMessageDiv = null;
     currentUserMessageDiv = null;
@@ -83,7 +92,36 @@ function handleJsonMessage(msg) {
     } else {
       currentGeminiMessageDiv = appendMessage("gemini", msg.text);
     }
+  } else if (msg.type === "tool_call") {
+    // Display tool execution
+    appendMessage("system", `🤖 Executing: ${msg.name}`);
   }
+}
+
+function displayRobotVideoFrame(base64Data) {
+  const img = new Image();
+  img.onload = () => {
+    const ctx = robotVideoCanvas.getContext("2d");
+    robotVideoCanvas.width = img.width;
+    robotVideoCanvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+    
+    // Copy to video preview canvas for display
+    const videoCtx = videoPreview.getContext ? null : document.getElementById("video-canvas").getContext("2d");
+    if (videoCtx) {
+      const canvas = document.getElementById("video-canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      videoCtx.drawImage(img, 0, 0);
+    }
+    
+    // Update video preview by drawing on it
+    videoPreview.style.display = "none";
+    robotVideoCanvas.style.display = "block";
+    robotVideoCanvas.style.width = "100%";
+    robotVideoCanvas.style.height = "auto";
+  };
+  img.src = "data:image/jpeg;base64," + base64Data;
 }
 
 function appendMessage(type, text) {
@@ -136,14 +174,50 @@ micBtn.onclick = async () => {
   }
 };
 
-cameraBtn.onclick = async () => {
-  if (cameraBtn.textContent === "Stop Camera") {
-    mediaHandler.stopVideo(videoPreview);
-    cameraBtn.textContent = "Start Camera";
-    screenBtn.textContent = "Share Screen";
+robotCameraBtn.onclick = () => {
+  if (showingRobotCamera) {
+    // Stop showing robot camera
+    showingRobotCamera = false;
+    robotCameraBtn.textContent = "Show Robot Camera";
+    robotVideoCanvas.style.display = "none";
+    videoPreview.style.display = "block";
     videoPlaceholder.classList.remove("hidden");
   } else {
-    // If another stream is active (e.g. Screen), stop it first
+    // Show robot camera
+    showingRobotCamera = true;
+    robotCameraBtn.textContent = "Hide Robot Camera";
+    videoPlaceholder.classList.add("hidden");
+    
+    // Stop any browser video streams
+    if (mediaHandler.videoStream) {
+      mediaHandler.stopVideo(videoPreview);
+      cameraBtn.textContent = "Browser Camera";
+      screenBtn.textContent = "Share Screen";
+    }
+    
+    // Robot frames will now be displayed via handleJsonMessage
+    robotVideoCanvas.style.display = "block";
+    videoPreview.style.display = "none";
+  }
+};
+
+cameraBtn.onclick = async () => {
+  if (cameraBtn.textContent === "Stop Browser Camera") {
+    mediaHandler.stopVideo(videoPreview);
+    cameraBtn.textContent = "Browser Camera";
+    screenBtn.textContent = "Share Screen";
+    if (!showingRobotCamera) {
+      videoPlaceholder.classList.remove("hidden");
+    }
+  } else {
+    // Stop robot camera if showing
+    if (showingRobotCamera) {
+      showingRobotCamera = false;
+      robotCameraBtn.textContent = "Show Robot Camera";
+      robotVideoCanvas.style.display = "none";
+    }
+    
+    // If screen share is active, stop it first
     if (mediaHandler.videoStream) {
       mediaHandler.stopVideo(videoPreview);
       screenBtn.textContent = "Share Screen";
@@ -155,8 +229,9 @@ cameraBtn.onclick = async () => {
           geminiClient.sendImage(base64Data);
         }
       });
-      cameraBtn.textContent = "Stop Camera";
+      cameraBtn.textContent = "Stop Browser Camera";
       screenBtn.textContent = "Share Screen";
+      videoPreview.style.display = "block";
       videoPlaceholder.classList.add("hidden");
     } catch (e) {
       alert("Could not access camera");
@@ -168,13 +243,22 @@ screenBtn.onclick = async () => {
   if (screenBtn.textContent === "Stop Sharing") {
     mediaHandler.stopVideo(videoPreview);
     screenBtn.textContent = "Share Screen";
-    cameraBtn.textContent = "Start Camera";
-    videoPlaceholder.classList.remove("hidden");
+    cameraBtn.textContent = "Browser Camera";
+    if (!showingRobotCamera) {
+      videoPlaceholder.classList.remove("hidden");
+    }
   } else {
-    // If another stream is active (e.g. Camera), stop it first
+    // Stop robot camera if showing
+    if (showingRobotCamera) {
+      showingRobotCamera = false;
+      robotCameraBtn.textContent = "Show Robot Camera";
+      robotVideoCanvas.style.display = "none";
+    }
+    
+    // If camera is active, stop it first
     if (mediaHandler.videoStream) {
       mediaHandler.stopVideo(videoPreview);
-      cameraBtn.textContent = "Start Camera";
+      cameraBtn.textContent = "Browser Camera";
     }
 
     try {
@@ -188,11 +272,14 @@ screenBtn.onclick = async () => {
         () => {
           // onEnded callback (e.g. user stopped sharing from browser)
           screenBtn.textContent = "Share Screen";
-          videoPlaceholder.classList.remove("hidden");
+          if (!showingRobotCamera) {
+            videoPlaceholder.classList.remove("hidden");
+          }
         }
       );
       screenBtn.textContent = "Stop Sharing";
-      cameraBtn.textContent = "Start Camera";
+      cameraBtn.textContent = "Browser Camera";
+      videoPreview.style.display = "block";
       videoPlaceholder.classList.add("hidden");
     } catch (e) {
       alert("Could not share screen");
@@ -222,9 +309,14 @@ function resetUI() {
   mediaHandler.stopAudio();
   mediaHandler.stopVideo(videoPreview);
   videoPlaceholder.classList.remove("hidden");
+  
+  showingRobotCamera = false;
+  robotVideoCanvas.style.display = "none";
+  videoPreview.style.display = "block";
 
   micBtn.textContent = "Start Mic";
-  cameraBtn.textContent = "Start Camera";
+  robotCameraBtn.textContent = "Show Robot Camera";
+  cameraBtn.textContent = "Browser Camera";
   screenBtn.textContent = "Share Screen";
   chatLog.innerHTML = "";
   connectBtn.disabled = false;

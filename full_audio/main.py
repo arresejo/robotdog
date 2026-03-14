@@ -87,6 +87,61 @@ async def websocket_endpoint(websocket: WebSocket):
     video_input_queue = asyncio.Queue()
     text_input_queue = asyncio.Queue()
 
+    async def stream_robot_video_to_gemini():
+        """Stream robot camera feed to Gemini Live API and frontend."""
+        if not robot_controller or not robot_controller.connected:
+            return
+        if robot_controller._config.dry_run or not robot_controller._config.video_enabled:
+            return
+        
+        frame_interval_seconds = 1.0 / robot_controller._config.video_fps
+        last_forwarded_sequence = 0
+        
+        logger.info("Starting robot video stream to Gemini and frontend")
+        
+        try:
+            while True:
+                got_frame = await robot_controller.wait_for_video_frame(timeout=2.0)
+                if not got_frame:
+                    await asyncio.sleep(frame_interval_seconds)
+                    continue
+                
+                metadata = robot_controller.latest_video_frame_metadata()
+                sequence = int(metadata["sequence"])
+                if sequence <= last_forwarded_sequence:
+                    await asyncio.sleep(frame_interval_seconds)
+                    continue
+                
+                jpeg_bytes = await robot_controller.get_latest_video_frame_jpeg()
+                if not jpeg_bytes:
+                    await asyncio.sleep(frame_interval_seconds)
+                    continue
+                
+                # Send to Gemini
+                await video_input_queue.put(jpeg_bytes)
+                
+                # Also send to frontend for display
+                try:
+                    await websocket.send_json({
+                        "type": "robot_video_frame",
+                        "data": base64.b64encode(jpeg_bytes).decode('utf-8'),
+                        "sequence": sequence
+                    })
+                except Exception as e:
+                    logger.debug(f"Could not send video frame to frontend: {e}")
+                
+                last_forwarded_sequence = sequence
+                
+                if robot_controller._config.debug:
+                    logger.info(f"Forwarded robot frame {sequence}: {len(jpeg_bytes)} bytes")
+                
+                await asyncio.sleep(frame_interval_seconds)
+        except asyncio.CancelledError:
+            logger.info("Robot video stream task cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error in robot video stream: {e}")
+
     async def audio_output_callback(data):
         await websocket.send_bytes(data)
 
@@ -127,6 +182,10 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.error(f"Error receiving from client: {e}")
 
     receive_task = asyncio.create_task(receive_from_client())
+    robot_video_task = None
+    
+    if robot_controller and robot_controller._config.video_enabled:
+        robot_video_task = asyncio.create_task(stream_robot_video_to_gemini())
 
     async def run_session():
         async for event in gemini_client.start_session(
@@ -145,6 +204,13 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"Error in Gemini session: {e}")
     finally:
         receive_task.cancel()
+        
+        if robot_video_task is not None:
+            robot_video_task.cancel()
+            try:
+                await robot_video_task
+            except asyncio.CancelledError:
+                pass
         
         if robot_controller and robot_controller.connected:
             try:
