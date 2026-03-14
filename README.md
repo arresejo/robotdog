@@ -1,6 +1,6 @@
 # Gemini Dog Trainers
 
-![Gemini Logo](https://upload.wikimedia.org/wikipedia/commons/thumb/1/1d/Google_Gemini_icon_2025.svg/960px-Google_Gemini_icon_2025.svg.png)
+<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/1/1d/Google_Gemini_icon_2025.svg/960px-Google_Gemini_icon_2025.svg.png" width="100" align="right">
 
 ## Project Overview
 
