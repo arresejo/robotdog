@@ -26,6 +26,17 @@ export ROBOT_SERIAL_NUMBER='B42D2000XXXXXXXX'
 export ROBOT_USERNAME='your-unitree-login'
 export ROBOT_PASSWORD='your-unitree-password'
 export ROBOT_DRY_RUN='true'
+export ROBOT_VIDEO_FPS='1.0'
+export ROBOT_VIDEO_JPEG_QUALITY='85'
+export ROBOT_VIDEO_DEBUG_DIR='.debug/robot-video'
+export ROBOT_PLAY_AUDIO='true'
+export ROBOT_DEBUG='true'
+```
+
+To disable sending the robot camera to Gemini:
+
+```sh
+export ROBOT_VIDEO_DISABLED='true'
 ```
 
 Connection methods:
@@ -39,6 +50,20 @@ Connection methods:
 ```sh
 uv run python 'main.py'
 ```
+
+When video is enabled, `main.py` subscribes to the Unitree camera feed and
+attaches the latest camera frame as a JPEG image to each user prompt sent to
+Gemini Live. This keeps the CLI responsive while still giving Gemini fresh
+robot vision context.
+
+If you set `ROBOT_VIDEO_DEBUG_DIR`, the bridge also saves the exact JPEG frames
+it forwards to Gemini so you can verify what the model actually received.
+
+By default the CLI stays quiet while you type. Set `ROBOT_DEBUG='true'` to show
+tool calls, Live API message payloads, and per-frame forwarding logs.
+
+By default the CLI does not play Gemini audio locally, so text responses stay
+responsive. Set `ROBOT_PLAY_AUDIO='true'` if you want local audio playback.
 
 Minimal posture test with one camera frame capture:
 

@@ -24,3 +24,6 @@ env/
 # Environment
 .env
 .env.local
+
+.private-docs/
+.debug/

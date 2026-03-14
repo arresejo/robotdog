@@ -1,25 +1,38 @@
 import asyncio
+import io
 import json
+import logging
 import os
 import re
 import tempfile
+import time
 import wave
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
+from PIL import Image
 from unitree_webrtc_connect.constants import (
     RTC_TOPIC,
     SPORT_CMD,
     WebRTCConnectionMethod,
 )
+import unitree_webrtc_connect.util as unitree_util
+import unitree_webrtc_connect.webrtc_datachannel as unitree_webrtc_datachannel
+import unitree_webrtc_connect.webrtc_driver as unitree_webrtc_driver
 from unitree_webrtc_connect.webrtc_driver import UnitreeWebRTCConnection
 
 DEFAULT_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 MAX_SPEED = 0.6
 MAX_DURATION_SECONDS = 3.0
+MAX_VIDEO_FPS = 1.0
+DEFAULT_VIDEO_FPS = 1.0
+DEFAULT_VIDEO_JPEG_QUALITY = 85
+TURN_RESPONSE_TIMEOUT_SECONDS = 30.0
 COMMAND_TOOL_NAMES = {
     "say_hello": "hello",
     "stand_up": "stand",
@@ -40,6 +53,12 @@ class RobotConfig:
     username: str | None
     password: str | None
     dry_run: bool
+    video_enabled: bool
+    video_fps: float
+    video_jpeg_quality: int
+    video_debug_dir: Path | None
+    play_audio: bool
+    debug: bool
 
     @classmethod
     def from_env(cls) -> "RobotConfig":
@@ -63,6 +82,22 @@ class RobotConfig:
             username=os.environ.get("ROBOT_USERNAME"),
             password=os.environ.get("ROBOT_PASSWORD"),
             dry_run=_is_truthy(os.environ.get("ROBOT_DRY_RUN")),
+            video_enabled=not _is_truthy(os.environ.get("ROBOT_VIDEO_DISABLED")),
+            video_fps=_clamp_float(
+                os.environ.get("ROBOT_VIDEO_FPS"),
+                default=DEFAULT_VIDEO_FPS,
+                minimum=0.1,
+                maximum=MAX_VIDEO_FPS,
+            ),
+            video_jpeg_quality=_clamp_int(
+                os.environ.get("ROBOT_VIDEO_JPEG_QUALITY"),
+                default=DEFAULT_VIDEO_JPEG_QUALITY,
+                minimum=1,
+                maximum=95,
+            ),
+            video_debug_dir=_optional_path(os.environ.get("ROBOT_VIDEO_DEBUG_DIR")),
+            play_audio=_is_truthy(os.environ.get("ROBOT_PLAY_AUDIO")),
+            debug=_is_truthy(os.environ.get("ROBOT_DEBUG")),
         )
 
 
@@ -70,10 +105,66 @@ def _is_truthy(value: str | None) -> bool:
     return value is not None and value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _clamp_float(
+    value: str | None,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    if value is None:
+        return default
+    return max(minimum, min(float(value), maximum))
+
+
+def _clamp_int(
+    value: str | None,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    if value is None:
+        return default
+    return max(minimum, min(int(value), maximum))
+
+
+def _optional_path(value: str | None) -> Path | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return Path(stripped)
+
+
+def _debug_log(enabled: bool, message: str) -> None:
+    if enabled:
+        print(message)
+
+
+def _quiet_sdk_print(*args: Any, **kwargs: Any) -> None:
+    return None
+
+
+def configure_unitree_sdk_output(debug: bool) -> None:
+    if debug:
+        return
+    unitree_util.print_status = _quiet_sdk_print
+    unitree_webrtc_driver.print_status = _quiet_sdk_print
+    unitree_webrtc_datachannel.print_status = _quiet_sdk_print
+    unitree_webrtc_datachannel.print = _quiet_sdk_print
+
+
 class RobotController:
     def __init__(self, config: RobotConfig) -> None:
         self._config = config
         self._conn: UnitreeWebRTCConnection | None = None
+        self._latest_video_frame: Any | None = None
+        self._video_frame_event = asyncio.Event()
+        self._video_frame_sequence = 0
+        self._latest_video_frame_shape: tuple[int, ...] | None = None
+        self._latest_video_frame_received_at = 0.0
 
     @property
     def connected(self) -> bool:
@@ -102,6 +193,9 @@ class RobotController:
             password=self._config.password,
         )
         await conn.connect()
+        if self._config.video_enabled:
+            conn.video.add_track_callback(self._capture_video_track)
+            conn.video.switchVideoChannel(True)
         self._conn = conn
         return {"ok": True, "message": "Robot connected successfully."}
 
@@ -117,6 +211,11 @@ class RobotController:
 
         await self._conn.disconnect()
         self._conn = None
+        self._latest_video_frame = None
+        self._video_frame_event.clear()
+        self._video_frame_sequence = 0
+        self._latest_video_frame_shape = None
+        self._latest_video_frame_received_at = 0.0
         return {"ok": True, "message": "Robot disconnected successfully."}
 
     async def status(self) -> dict[str, Any]:
@@ -131,6 +230,9 @@ class RobotController:
             "dry_run": self._config.dry_run,
             "connection_method": self._config.connection_method.name,
             "motion_mode": mode,
+            "video_enabled": self._config.video_enabled and not self._config.dry_run,
+            "video_frame_sequence": self._video_frame_sequence,
+            "video_frame_shape": self._latest_video_frame_shape,
         }
 
     async def execute_command(
@@ -240,6 +342,66 @@ class RobotController:
         if not self._conn:
             raise RuntimeError("Robot connection is not initialized.")
         return await self._conn.datachannel.pub_sub.publish_request_new(topic, payload)
+
+    async def _capture_video_track(self, track: Any) -> None:
+        while True:
+            try:
+                frame = await track.recv()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _debug_log(self._config.debug, f"Robot video track ended: {exc}")
+                return
+
+            self._latest_video_frame = frame.to_ndarray(format="rgb24")
+            self._video_frame_sequence += 1
+            self._latest_video_frame_shape = tuple(self._latest_video_frame.shape)
+            self._latest_video_frame_received_at = time.time()
+            self._video_frame_event.set()
+
+    async def wait_for_video_frame(self, timeout: float = 10.0) -> bool:
+        if self._config.dry_run or not self._config.video_enabled:
+            return False
+        if self._latest_video_frame is not None:
+            return True
+        try:
+            await asyncio.wait_for(self._video_frame_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return False
+        return self._latest_video_frame is not None
+
+    async def get_latest_video_frame_jpeg(self) -> bytes | None:
+        if self._config.dry_run or not self._config.video_enabled:
+            return None
+
+        frame = self._latest_video_frame
+        if frame is None:
+            return None
+
+        def encode() -> bytes:
+            image = Image.fromarray(frame, mode="RGB")
+            with io.BytesIO() as buffer:
+                image.save(
+                    buffer,
+                    format="JPEG",
+                    quality=self._config.video_jpeg_quality,
+                    optimize=True,
+                )
+                return buffer.getvalue()
+
+        return await asyncio.to_thread(encode)
+
+    def latest_video_frame_metadata(self) -> dict[str, Any]:
+        return {
+            "sequence": self._video_frame_sequence,
+            "shape": self._latest_video_frame_shape,
+            "received_at": self._latest_video_frame_received_at,
+        }
+
+
+def _write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
 
 
 def build_tools() -> list[types.Tool]:
@@ -374,6 +536,8 @@ def build_live_config() -> types.LiveConnectConfig:
         tools=build_tools(),
         system_instruction=(
             "You are controlling a Unitree robot through a narrow tool interface. "
+            "You may receive recent camera images from the robot. "
+            "Use that visual context when it helps you answer or decide what to do next. "
             "Only use the provided tools for direct robot actions. "
             "The robot connection is managed automatically. "
             "Keep motion commands conservative. Prefer short moves and call stop when the user asks to stop. "
@@ -389,6 +553,20 @@ def _pcm_sample_rate_from_mime_type(mime_type: str | None) -> int:
     if match:
         return int(match.group(1))
     return 24000
+
+
+def _sanitize_live_message_for_logging(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        sanitized: dict[Any, Any] = {}
+        for key, value in payload.items():
+            if key == "data" and isinstance(value, str):
+                sanitized[key] = "<omitted>"
+            else:
+                sanitized[key] = _sanitize_live_message_for_logging(value)
+        return sanitized
+    if isinstance(payload, list):
+        return [_sanitize_live_message_for_logging(item) for item in payload]
+    return payload
 
 
 async def play_audio_chunk(audio_bytes: bytes, mime_type: str | None) -> None:
@@ -428,7 +606,10 @@ async def execute_tool_call(
 ) -> types.FunctionResponse:
     args = function_call.args or {}
     name = function_call.name or ""
-    print(f"Tool call: {name} args={json.dumps(args, ensure_ascii=True)}")
+    _debug_log(
+        controller._config.debug,
+        f"Tool call: {name} args={json.dumps(args, ensure_ascii=True)}",
+    )
 
     try:
         if name == "get_robot_status":
@@ -454,21 +635,27 @@ async def execute_tool_call(
 async def handle_model_turn(
     session: Any,
     controller: RobotController,
-) -> str:
+) -> tuple[str, bool]:
     chunks: list[str] = []
+    streamed_output = False
 
     async for message in session.receive():
-        print(
-            "Model message JSON:",
-            json.dumps(message.model_dump(mode="json", exclude_none=True), ensure_ascii=True),
+        message_payload = _sanitize_live_message_for_logging(
+            message.model_dump(mode="json", exclude_none=True)
+        )
+        _debug_log(
+            controller._config.debug,
+            "Model message JSON: "
+            + json.dumps(message_payload, ensure_ascii=True),
         )
         if message.server_content and message.server_content.model_turn:
             for part in message.server_content.model_turn.parts or []:
                 if part.inline_data and part.inline_data.data:
-                    await play_audio_chunk(
-                        audio_bytes=part.inline_data.data,
-                        mime_type=part.inline_data.mime_type,
-                    )
+                    if controller._config.play_audio:
+                        await play_audio_chunk(
+                            audio_bytes=part.inline_data.data,
+                            mime_type=part.inline_data.mime_type,
+                        )
         if message.text:
             chunks.append(message.text)
         if (
@@ -476,7 +663,12 @@ async def handle_model_turn(
             and message.server_content.output_transcription
             and message.server_content.output_transcription.text
         ):
-            chunks.append(message.server_content.output_transcription.text)
+            transcript_chunk = message.server_content.output_transcription.text
+            chunks.append(transcript_chunk)
+            if not streamed_output:
+                print("Gemini: ", end="", flush=True)
+                streamed_output = True
+            print(transcript_chunk, end="", flush=True)
 
         if message.tool_call and message.tool_call.function_calls:
             responses = [
@@ -485,7 +677,64 @@ async def handle_model_turn(
             ]
             await session.send_tool_response(function_responses=responses)
 
-    return "".join(chunks).strip()
+        if (
+            message.server_content
+            and (
+                message.server_content.turn_complete is True
+                or message.server_content.generation_complete is True
+            )
+        ):
+            break
+
+    if streamed_output:
+        print()
+    return "".join(chunks).strip(), streamed_output
+
+
+async def build_user_turn_parts(
+    controller: RobotController,
+    user_input: str,
+) -> list[types.Part]:
+    parts: list[types.Part] = []
+
+    if controller.connected and controller._config.video_enabled:
+        got_frame = await controller.wait_for_video_frame(timeout=2.0)
+        if not got_frame:
+            _debug_log(
+                controller._config.debug,
+                "Robot video stream did not produce a frame before prompt.",
+            )
+        else:
+            debug_dir = controller._config.video_debug_dir
+            if debug_dir is not None:
+                debug_dir.mkdir(parents=True, exist_ok=True)
+            jpeg_bytes = await controller.get_latest_video_frame_jpeg()
+            if jpeg_bytes:
+                metadata = controller.latest_video_frame_metadata()
+                parts.append(types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg"))
+                if controller._config.debug:
+                    print(
+                        "Attached robot frame to user turn:",
+                        json.dumps(
+                            {
+                                "sequence": metadata["sequence"],
+                                "shape": metadata["shape"],
+                                "age_ms": round(
+                                    max(0.0, time.time() - float(metadata["received_at"]))
+                                    * 1000,
+                                    1,
+                                ),
+                                "jpeg_bytes": len(jpeg_bytes),
+                            },
+                            ensure_ascii=True,
+                        ),
+                    )
+                if debug_dir is not None:
+                    debug_path = debug_dir / f"frame_{int(metadata['sequence']):06d}.jpg"
+                    await asyncio.to_thread(_write_bytes, debug_path, jpeg_bytes)
+
+    parts.append(types.Part(text=user_input))
+    return parts
 
 
 async def repl() -> None:
@@ -495,6 +744,10 @@ async def repl() -> None:
 
     model = os.environ.get("GEMINI_LIVE_MODEL", DEFAULT_MODEL)
     robot_config = RobotConfig.from_env()
+    configure_unitree_sdk_output(robot_config.debug)
+    if not robot_config.debug:
+        logging.getLogger("aiortc").setLevel(logging.ERROR)
+        logging.getLogger().setLevel(logging.CRITICAL)
     controller = RobotController(robot_config)
     client = genai.Client(api_key=api_key)
 
@@ -504,11 +757,8 @@ async def repl() -> None:
     async with client.aio.live.connect(
         model=model, config=build_live_config()
     ) as session:
-        print(f"Gemini Live session started with model: {model}")
-        print(
-            "Type a plain request such as 'say hello' or 'move forward for a second', "
-            "then press Enter."
-        )
+        print("Gemini session started.")
+        print("Type a request and press Enter.")
         print("Type 'exit' to quit.")
 
         while True:
@@ -518,19 +768,31 @@ async def repl() -> None:
             if not user_input.strip():
                 continue
 
+            turn_parts = await build_user_turn_parts(controller, user_input)
             await session.send_client_content(
                 turns=types.Content(
                     role="user",
-                    parts=[types.Part(text=user_input)],
+                    parts=turn_parts,
                 ),
                 turn_complete=True,
             )
-            response_text = await handle_model_turn(session, controller)
-            if response_text:
+            try:
+                response_text, streamed_output = await asyncio.wait_for(
+                    handle_model_turn(session, controller),
+                    timeout=TURN_RESPONSE_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                print("Gemini timed out waiting for a turn response.")
+                break
+            except APIError as exc:
+                print(f"Gemini session error: {exc}")
+                break
+            if response_text and not streamed_output:
                 print(f"Gemini: {response_text}")
 
     if controller.connected:
-        await controller.disconnect()
+        with suppress(Exception):
+            await controller.disconnect()
 
 
 def main() -> None:
