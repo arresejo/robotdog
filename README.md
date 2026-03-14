@@ -1,6 +1,6 @@
 # Gemini Dog Trainers
 
-![Gemini Logo](https://upload.wikimedia.org/wikipedia/commons/d/d9/Google_Gemini_logo_2025.svg)
+![Gemini Logo](https://upload.wikimedia.org/wikipedia/commons/6/69/Google_Gemini_icon_2025.svg)
 
 ## Project Overview
 
@@ -12,9 +12,9 @@ This project transforms a standard Unitree robot dog into an intelligent, visual
 **Team Members:** 3  
 
 ### Team Members
-- nassabdAbdallah Nassur (nassur1607@gmail.com)
-- titouvTitouan Verhille (titouan.verhille@gmail.com)
-- arresejoJorge Arrese (jorge.arrese@gmail.com)
+- Abdallah Nassur (nassur1607@gmail.com)
+- Titouan Verhille (titouan.verhille@gmail.com)
+- Jorge Arrese (jorge.arrese@gmail.com)
 
 ### Links
 - **GitHub Repository:** https://github.com/arresejo/robotdog
