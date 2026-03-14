@@ -26,6 +26,7 @@ DEFAULT_VIDEO_FPS = 1.0
 DEFAULT_VIDEO_JPEG_QUALITY = 85
 COMMAND_TOOL_NAMES = {
     "say_hello": "hello",
+    "make_finger_heart": "finger_heart",
     "stand_up": "stand",
     "sit_down": "sit",
     "move_forward": "move_forward",
@@ -252,6 +253,9 @@ class RobotController:
         if command == "hello":
             await self._publish_sport({"api_id": SPORT_CMD["Hello"]})
             return {"ok": True, "message": "Robot said hello."}
+        if command == "finger_heart":
+            await self._publish_sport({"api_id": SPORT_CMD["FingerHeart"]})
+            return {"ok": True, "message": "Robot made a finger heart gesture."}
         if command == "stand":
             await self._publish_sport({"api_id": SPORT_CMD["StandUp"]})
             return {"ok": True, "message": "Robot stood up."}
@@ -411,6 +415,14 @@ def build_robot_tools() -> list[types.Tool]:
                     },
                 ),
                 types.FunctionDeclaration(
+                    name="make_finger_heart",
+                    description="Make the robot perform its finger heart gesture.",
+                    parameters_json_schema={
+                        "type": "object",
+                        "properties": {},
+                    },
+                ),
+                types.FunctionDeclaration(
                     name="stand_up",
                     description="Make the robot stand up.",
                     parameters_json_schema={
@@ -522,6 +534,9 @@ def build_robot_tool_mapping(controller: RobotController) -> dict[str, Any]:
     async def say_hello() -> dict[str, Any]:
         return await controller.execute_command("hello")
 
+    async def make_finger_heart() -> dict[str, Any]:
+        return await controller.execute_command("finger_heart")
+
     async def stand_up() -> dict[str, Any]:
         return await controller.execute_command("stand")
 
@@ -562,6 +577,7 @@ def build_robot_tool_mapping(controller: RobotController) -> dict[str, Any]:
     return {
         "get_robot_status": get_robot_status,
         "say_hello": say_hello,
+        "make_finger_heart": make_finger_heart,
         "stand_up": stand_up,
         "sit_down": sit_down,
         "move_forward": move_forward,

@@ -86,6 +86,7 @@ export ROBOT_IMAGE_PATH='robot_camera_capture.ppm'
 Example prompts:
 
 - `connect to the robot and say hello`
+- `make a finger heart`
 - `move forward for one second`
 - `turn left briefly`
 - `sit down`
@@ -96,6 +97,7 @@ Example prompts:
 This first try intentionally supports only a narrow command set:
 
 - `hello`
+- `finger_heart`
 - `stand`
 - `sit`
 - `move_forward`

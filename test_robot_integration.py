@@ -52,6 +52,7 @@ async def test_robot_integration():
     test_tools = [
         ("get_robot_status", {}),
         ("say_hello", {}),
+        ("make_finger_heart", {}),
         ("stand_up", {}),
         ("move_forward", {"duration_seconds": 1.0, "speed": 0.3}),
         ("stop_robot", {}),
@@ -79,7 +80,7 @@ async def test_robot_integration():
     print("3. Run: cd full_audio && uv run main.py")
     print("4. Open http://localhost:8000 in your browser")
     print("5. Click 'Connect' and enable microphone")
-    print("6. Say commands like 'stand up' or 'say hello'")
+    print("6. Say commands like 'stand up', 'say hello', or 'make a finger heart'")
     print()
 
 
