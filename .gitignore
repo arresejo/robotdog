@@ -21,6 +21,9 @@ env/
 # Logs
 *.log
 
+# Models
+*.pt
+
 # Environment
 .env
 .env.local

@@ -1,9 +1,12 @@
 [project]
 name = "robotdog"
 version = "0.1.0"
-description = "Add your description here"
+description = "Navigate a Unitree Go2 to a target object detected by camera"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "unitree-webrtc-connect>=2.0.4",
+    "ultralytics>=8.3.0",
+    "opencv-python-headless>=4.10.0",
+    "numpy>=2.0.0",
 ]
