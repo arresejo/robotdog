@@ -1,7 +1,11 @@
 import asyncio
 import json
 import os
+import re
+import tempfile
+import wave
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from google import genai
@@ -304,12 +308,53 @@ def build_live_config() -> types.LiveConnectConfig:
     )
 
 
+def _pcm_sample_rate_from_mime_type(mime_type: str | None) -> int:
+    if not mime_type:
+        return 24000
+    match = re.search(r"rate=(\d+)", mime_type)
+    if match:
+        return int(match.group(1))
+    return 24000
+
+
+async def play_audio_chunk(audio_bytes: bytes, mime_type: str | None) -> None:
+    if not audio_bytes:
+        return
+
+    sample_rate = _pcm_sample_rate_from_mime_type(mime_type)
+
+    def write_wav_file() -> str:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            tmp_path = tmp_file.name
+
+        with wave.open(tmp_path, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(audio_bytes)
+
+        return tmp_path
+
+    wav_path = await asyncio.to_thread(write_wav_file)
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "afplay",
+            wav_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await process.wait()
+    finally:
+        Path(wav_path).unlink(missing_ok=True)
+
+
 async def execute_tool_call(
     controller: RobotController,
     function_call: types.FunctionCall,
 ) -> types.FunctionResponse:
     args = function_call.args or {}
     name = function_call.name or ""
+    print(f"Tool call: {name} args={json.dumps(args, ensure_ascii=True)}")
 
     try:
         if name == "connect_robot":
@@ -343,6 +388,17 @@ async def handle_model_turn(
     chunks: list[str] = []
 
     async for message in session.receive():
+        print(
+            "Model message JSON:",
+            json.dumps(message.model_dump(mode="json", exclude_none=True), ensure_ascii=True),
+        )
+        if message.server_content and message.server_content.model_turn:
+            for part in message.server_content.model_turn.parts or []:
+                if part.inline_data and part.inline_data.data:
+                    await play_audio_chunk(
+                        audio_bytes=part.inline_data.data,
+                        mime_type=part.inline_data.mime_type,
+                    )
         if message.text:
             chunks.append(message.text)
         if (
