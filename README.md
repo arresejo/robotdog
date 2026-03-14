@@ -40,13 +40,18 @@ Connection methods:
 uv run python 'main.py'
 ```
 
-Direct robot-only sit test:
+Minimal posture test with one camera frame capture:
 
 ```sh
-uv run python 'sit_down_test.py'
+export ROBOT_IMAGE_PATH='robot_camera_capture.ppm'
+uv run python 'simple_posture_with_image_test.py'
+uv run python 'simple_posture_with_image_test.py' --sit-up
 ```
 
-Optional image output path for that script:
+This version is intentionally close to the upstream `sportmode.py` example:
+it connects with `LocalSTA`, checks `MOTION_SWITCHER`, sends `Sit` or `RiseSit`, saves one camera frame, then disconnects.
+
+Optional image output path:
 
 ```sh
 export ROBOT_IMAGE_PATH='robot_camera_capture.ppm'
