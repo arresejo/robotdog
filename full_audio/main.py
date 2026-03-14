@@ -89,6 +89,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def audio_output_callback(data):
         await websocket.send_bytes(data)
+        # Also play on robot speaker if connected with ROBOT_PLAY_AUDIO=true
+        if robot_controller and robot_controller.connected and robot_controller._config.play_audio:
+            try:
+                await robot_controller.play_audio_on_robot(data, sample_rate=24000)
+            except Exception as e:
+                logger.warning(f"Robot audio playback failed: {e}")
 
     async def audio_interrupt_callback():
         pass

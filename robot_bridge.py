@@ -1,8 +1,12 @@
 import asyncio
+import base64
+import hashlib
 import io
 import json
 import os
 import time
+import uuid
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,6 +14,7 @@ from typing import Any
 from google.genai import types
 from PIL import Image
 from unitree_webrtc_connect.constants import (
+    AUDIO_API,
     RTC_TOPIC,
     SPORT_CMD,
     WebRTCConnectionMethod,
@@ -156,10 +161,14 @@ class RobotController:
         self._video_frame_sequence = 0
         self._latest_video_frame_shape: tuple[int, ...] | None = None
         self._latest_video_frame_received_at = 0.0
+        self._audio_buffer = bytearray()
+        self._audio_flush_task: asyncio.Task[None] | None = None
+        self._audio_sample_rate = 24000
 
     @property
     def connected(self) -> bool:
         return self._config.dry_run or bool(self._conn and self._conn.isConnected)
+
 
     async def ensure_connected(self) -> dict[str, Any]:
         if self.connected:
@@ -188,6 +197,7 @@ class RobotController:
             conn.video.add_track_callback(self._capture_video_track)
             conn.video.switchVideoChannel(True)
         self._conn = conn
+
         return {"ok": True, "message": "Robot connected successfully."}
 
     async def disconnect(self) -> dict[str, Any]:
@@ -199,6 +209,13 @@ class RobotController:
 
         if not self._conn:
             return {"ok": True, "message": "Robot is already disconnected."}
+
+        # Flush any remaining audio before disconnecting
+        if self._audio_buffer:
+            await self._flush_audio_buffer()
+        if self._audio_flush_task and not self._audio_flush_task.done():
+            self._audio_flush_task.cancel()
+            self._audio_flush_task = None
 
         await self._conn.disconnect()
         self._conn = None
@@ -333,6 +350,156 @@ class RobotController:
         if not self._conn:
             raise RuntimeError("Robot connection is not initialized.")
         return await self._conn.datachannel.pub_sub.publish_request_new(topic, payload)
+
+    # --- Robot speaker (upload-then-play) ---
+
+    AUDIO_UPLOAD_CHUNK_B64 = 61440  # ~45KB base64 chunks — fewer round-trips
+    AUDIO_SAMPLE_RATE = 8000        # 8kHz telephone quality — fastest upload
+    AUDIO_FLUSH_INTERVAL = 0.5      # seconds — accumulate audio before uploading
+    AUDIO_CHUNK_DELAY = 0.01        # seconds between chunks (keep small for speed)
+
+    async def play_audio_on_robot(
+        self, pcm_data: bytes, sample_rate: int = 24000
+    ) -> None:
+        """Queue PCM audio for playback on the robot speaker.
+
+        Audio is buffered until no new data arrives for AUDIO_FLUSH_INTERVAL,
+        then uploaded to robot storage and played.
+        """
+        if not self._conn:
+            raise RuntimeError("Robot connection is not initialized.")
+
+        self._audio_sample_rate = sample_rate
+        self._audio_buffer.extend(pcm_data)
+
+        # (Re)start the flush task — resets the idle timer each time new data arrives
+        if self._audio_flush_task and not self._audio_flush_task.done():
+            self._audio_flush_task.cancel()
+        self._audio_flush_task = asyncio.create_task(self._audio_flush_after_idle())
+
+    async def _audio_flush_after_idle(self) -> None:
+        """Wait for silence (no new data) then flush the buffer."""
+        try:
+            await asyncio.sleep(self.AUDIO_FLUSH_INTERVAL)
+            if self._audio_buffer:
+                await self._flush_audio_buffer()
+        except asyncio.CancelledError:
+            pass
+
+    async def _flush_audio_buffer(self) -> None:
+        """Upload buffered audio to robot storage and play it."""
+        if not self._audio_buffer or not self._conn:
+            return
+
+        pcm_data = bytes(self._audio_buffer)
+        self._audio_buffer.clear()
+
+        wav_bytes = self._pcm_to_wav(pcm_data, self._audio_sample_rate,
+                                     self.AUDIO_SAMPLE_RATE)
+
+        file_name = f"gemini_{int(time.time() * 1000)}"
+        file_md5 = hashlib.md5(wav_bytes).hexdigest()
+        b64_data = base64.b64encode(wav_bytes).decode("utf-8")
+
+        chunk_size = self.AUDIO_UPLOAD_CHUNK_B64
+        chunks = [
+            b64_data[i : i + chunk_size]
+            for i in range(0, len(b64_data), chunk_size)
+        ]
+        total_chunks = len(chunks)
+        topic = "rt/api/audiohub/request"
+
+        _debug_log(self._config.debug, f"Uploading audio '{file_name}' ({total_chunks} chunks)...")
+
+        # Upload all chunks
+        for i, chunk in enumerate(chunks, 1):
+            parameter = {
+                "file_name": file_name,
+                "file_type": "wav",
+                "file_size": len(wav_bytes),
+                "current_block_index": i,
+                "total_block_number": total_chunks,
+                "block_content": chunk,
+                "current_block_size": len(chunk),
+                "file_md5": file_md5,
+                "create_time": int(time.time() * 1000),
+            }
+            await self._publish_request(topic, {
+                "api_id": AUDIO_API["UPLOAD_AUDIO_FILE"],
+                "parameter": json.dumps(parameter, ensure_ascii=True),
+            })
+            if i < total_chunks:
+                await asyncio.sleep(self.AUDIO_CHUNK_DELAY)
+
+        _debug_log(self._config.debug, f"Upload complete. Looking up UUID for '{file_name}'...")
+
+        # Get audio list to find the UUID of the uploaded file
+        response = await self._publish_request(topic, {
+            "api_id": AUDIO_API["GET_AUDIO_LIST"],
+            "parameter": json.dumps({}),
+        })
+
+        audio_uuid = None
+        try:
+            data_str = response.get("data", {}).get("data", "{}")
+            audio_list = json.loads(data_str).get("audio_list", [])
+            entry = next((a for a in audio_list if a.get("CUSTOM_NAME") == file_name), None)
+            if entry:
+                audio_uuid = entry["UNIQUE_ID"]
+        except Exception:
+            pass
+
+        if audio_uuid:
+            # Ensure no-loop playback
+            await self._publish_request(topic, {
+                "api_id": AUDIO_API["SET_PLAY_MODE"],
+                "parameter": json.dumps({"play_mode": "no_cycle"}),
+            })
+            _debug_log(self._config.debug, f"Playing audio UUID={audio_uuid}")
+            await self._publish_request(topic, {
+                "api_id": AUDIO_API["SELECT_START_PLAY"],
+                "parameter": json.dumps({"unique_id": audio_uuid}),
+            })
+            # Schedule cleanup of the uploaded file after playback
+            asyncio.create_task(self._delete_audio_after_delay(topic, audio_uuid, file_name, len(wav_bytes)))
+        else:
+            _debug_log(self._config.debug, f"Warning: could not find uploaded audio '{file_name}'")
+
+    async def _delete_audio_after_delay(self, topic: str, audio_uuid: str, file_name: str, wav_size: int) -> None:
+        """Delete uploaded audio file after estimated playback duration."""
+        # Estimate duration: wav_size / (sample_rate * channels * bytes_per_sample)
+        duration = wav_size / (self.AUDIO_SAMPLE_RATE * 1 * 2)
+        await asyncio.sleep(duration + 1.0)
+        try:
+            await self._publish_request(topic, {
+                "api_id": AUDIO_API["SELECT_DELETE"],
+                "parameter": json.dumps({"unique_id": audio_uuid}),
+            })
+            _debug_log(self._config.debug, f"Deleted audio '{file_name}'")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _pcm_to_wav(pcm_data: bytes, src_rate: int, dst_rate: int) -> bytes:
+        """Wrap raw 16-bit mono PCM in a WAV container, resampling if needed."""
+        if src_rate != dst_rate:
+            import array
+            samples_in = array.array("h", pcm_data)
+            ratio = dst_rate / src_rate
+            n_out = int(len(samples_in) * ratio)
+            samples_out = array.array("h",
+                [samples_in[min(int(i / ratio), len(samples_in) - 1)] for i in range(n_out)])
+            pcm_data = samples_out.tobytes()
+            rate = dst_rate
+        else:
+            rate = src_rate
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(rate)
+            wf.writeframes(pcm_data)
+        return buf.getvalue()
 
     async def _capture_video_track(self, track: Any) -> None:
         while True:
