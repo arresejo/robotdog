@@ -13,7 +13,7 @@ from unitree_webrtc_connect.constants import (
 )
 from unitree_webrtc_connect.webrtc_driver import UnitreeWebRTCConnection
 
-DEFAULT_MODEL = "gemini-live-2.5-flash-preview"
+DEFAULT_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 MAX_SPEED = 0.6
 MAX_DURATION_SECONDS = 3.0
 
@@ -291,7 +291,8 @@ def build_tools() -> list[types.Tool]:
 
 def build_live_config() -> types.LiveConnectConfig:
     return types.LiveConnectConfig(
-        response_modalities=["TEXT"],
+        response_modalities=["AUDIO"],
+        output_audio_transcription={},
         tools=build_tools(),
         system_instruction=(
             "You are controlling a Unitree robot through a narrow tool interface. "
@@ -344,6 +345,12 @@ async def handle_model_turn(
     async for message in session.receive():
         if message.text:
             chunks.append(message.text)
+        if (
+            message.server_content
+            and message.server_content.output_transcription
+            and message.server_content.output_transcription.text
+        ):
+            chunks.append(message.server_content.output_transcription.text)
 
         if message.tool_call and message.tool_call.function_calls:
             responses = [
@@ -382,7 +389,13 @@ async def repl() -> None:
             if not user_input.strip():
                 continue
 
-            await session.send_realtime_input(text=user_input)
+            await session.send_client_content(
+                turns=types.Content(
+                    role="user",
+                    parts=[types.Part(text=user_input)],
+                ),
+                turn_complete=True,
+            )
             response_text = await handle_model_turn(session, controller)
             if response_text:
                 print(f"Gemini: {response_text}")
