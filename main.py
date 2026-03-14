@@ -20,6 +20,16 @@ from unitree_webrtc_connect.webrtc_driver import UnitreeWebRTCConnection
 DEFAULT_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 MAX_SPEED = 0.6
 MAX_DURATION_SECONDS = 3.0
+COMMAND_TOOL_NAMES = {
+    "say_hello": "hello",
+    "stand_up": "stand",
+    "sit_down": "sit",
+    "move_forward": "move_forward",
+    "move_backward": "move_backward",
+    "turn_left": "turn_left",
+    "turn_right": "turn_right",
+    "stop_robot": "stop",
+}
 
 
 @dataclass(slots=True)
@@ -69,6 +79,11 @@ class RobotController:
     def connected(self) -> bool:
         return self._config.dry_run or bool(self._conn and self._conn.isConnected)
 
+    async def ensure_connected(self) -> dict[str, Any]:
+        if self.connected:
+            return {"ok": True, "message": "Robot is already connected."}
+        return await self.connect()
+
     async def connect(self) -> dict[str, Any]:
         if self._config.dry_run:
             return {
@@ -105,6 +120,7 @@ class RobotController:
         return {"ok": True, "message": "Robot disconnected successfully."}
 
     async def status(self) -> dict[str, Any]:
+        await self.ensure_connected()
         mode: str | None = None
         if self.connected and not self._config.dry_run:
             mode = await self._get_motion_mode()
@@ -136,8 +152,7 @@ class RobotController:
                 "speed": speed,
             }
 
-        if not self.connected:
-            raise RuntimeError("Robot is not connected. Call connect_robot first.")
+        await self.ensure_connected()
 
         await self._ensure_normal_mode()
 
@@ -232,14 +247,6 @@ def build_tools() -> list[types.Tool]:
         types.Tool(
             function_declarations=[
                 types.FunctionDeclaration(
-                    name="connect_robot",
-                    description="Connect to the Unitree robot before issuing motion commands.",
-                    parameters_json_schema={
-                        "type": "object",
-                        "properties": {},
-                    },
-                ),
-                types.FunctionDeclaration(
                     name="get_robot_status",
                     description="Get the current robot connection and motion mode status.",
                     parameters_json_schema={
@@ -248,24 +255,35 @@ def build_tools() -> list[types.Tool]:
                     },
                 ),
                 types.FunctionDeclaration(
-                    name="robot_command",
-                    description="Run one simple motion command on the robot.",
+                    name="say_hello",
+                    description="Make the robot perform its hello gesture.",
+                    parameters_json_schema={
+                        "type": "object",
+                        "properties": {},
+                    },
+                ),
+                types.FunctionDeclaration(
+                    name="stand_up",
+                    description="Make the robot stand up.",
+                    parameters_json_schema={
+                        "type": "object",
+                        "properties": {},
+                    },
+                ),
+                types.FunctionDeclaration(
+                    name="sit_down",
+                    description="Make the robot sit down.",
+                    parameters_json_schema={
+                        "type": "object",
+                        "properties": {},
+                    },
+                ),
+                types.FunctionDeclaration(
+                    name="move_forward",
+                    description="Move the robot forward for a short duration.",
                     parameters_json_schema={
                         "type": "object",
                         "properties": {
-                            "command": {
-                                "type": "string",
-                                "enum": [
-                                    "hello",
-                                    "stand",
-                                    "sit",
-                                    "move_forward",
-                                    "move_backward",
-                                    "turn_left",
-                                    "turn_right",
-                                    "stop",
-                                ],
-                            },
                             "duration_seconds": {
                                 "type": "number",
                                 "minimum": 0.1,
@@ -277,12 +295,68 @@ def build_tools() -> list[types.Tool]:
                                 "maximum": MAX_SPEED,
                             },
                         },
-                        "required": ["command"],
                     },
                 ),
                 types.FunctionDeclaration(
-                    name="disconnect_robot",
-                    description="Disconnect from the Unitree robot when the session is finished.",
+                    name="move_backward",
+                    description="Move the robot backward for a short duration.",
+                    parameters_json_schema={
+                        "type": "object",
+                        "properties": {
+                            "duration_seconds": {
+                                "type": "number",
+                                "minimum": 0.1,
+                                "maximum": MAX_DURATION_SECONDS,
+                            },
+                            "speed": {
+                                "type": "number",
+                                "minimum": 0.1,
+                                "maximum": MAX_SPEED,
+                            },
+                        },
+                    },
+                ),
+                types.FunctionDeclaration(
+                    name="turn_left",
+                    description="Turn the robot left for a short duration.",
+                    parameters_json_schema={
+                        "type": "object",
+                        "properties": {
+                            "duration_seconds": {
+                                "type": "number",
+                                "minimum": 0.1,
+                                "maximum": MAX_DURATION_SECONDS,
+                            },
+                            "speed": {
+                                "type": "number",
+                                "minimum": 0.1,
+                                "maximum": MAX_SPEED,
+                            },
+                        },
+                    },
+                ),
+                types.FunctionDeclaration(
+                    name="turn_right",
+                    description="Turn the robot right for a short duration.",
+                    parameters_json_schema={
+                        "type": "object",
+                        "properties": {
+                            "duration_seconds": {
+                                "type": "number",
+                                "minimum": 0.1,
+                                "maximum": MAX_DURATION_SECONDS,
+                            },
+                            "speed": {
+                                "type": "number",
+                                "minimum": 0.1,
+                                "maximum": MAX_SPEED,
+                            },
+                        },
+                    },
+                ),
+                types.FunctionDeclaration(
+                    name="stop_robot",
+                    description="Stop the robot's current motion.",
                     parameters_json_schema={
                         "type": "object",
                         "properties": {},
@@ -301,7 +375,7 @@ def build_live_config() -> types.LiveConnectConfig:
         system_instruction=(
             "You are controlling a Unitree robot through a narrow tool interface. "
             "Only use the provided tools for direct robot actions. "
-            "Before the first movement command, connect the robot if needed. "
+            "The robot connection is managed automatically. "
             "Keep motion commands conservative. Prefer short moves and call stop when the user asks to stop. "
             "If the user asks for a capability outside the supported commands, explain the limitation plainly."
         ),
@@ -357,18 +431,14 @@ async def execute_tool_call(
     print(f"Tool call: {name} args={json.dumps(args, ensure_ascii=True)}")
 
     try:
-        if name == "connect_robot":
-            result = await controller.connect()
-        elif name == "get_robot_status":
+        if name == "get_robot_status":
             result = await controller.status()
-        elif name == "robot_command":
+        elif name in COMMAND_TOOL_NAMES:
             result = await controller.execute_command(
-                command=str(args.get("command", "")),
+                command=COMMAND_TOOL_NAMES[name],
                 duration_seconds=float(args.get("duration_seconds", 1.5)),
                 speed=float(args.get("speed", 0.3)),
             )
-        elif name == "disconnect_robot":
-            result = await controller.disconnect()
         else:
             result = {"ok": False, "error": f"Unknown tool call: {name}"}
     except Exception as exc:
@@ -428,13 +498,16 @@ async def repl() -> None:
     controller = RobotController(robot_config)
     client = genai.Client(api_key=api_key)
 
+    connection_result = await controller.ensure_connected()
+    print(connection_result["message"])
+
     async with client.aio.live.connect(
         model=model, config=build_live_config()
     ) as session:
         print(f"Gemini Live session started with model: {model}")
         print(
-            "Type a plain request such as 'connect to the robot and say hello' "
-            "or 'move forward for a second', then press Enter."
+            "Type a plain request such as 'say hello' or 'move forward for a second', "
+            "then press Enter."
         )
         print("Type 'exit' to quit.")
 
