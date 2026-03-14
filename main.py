@@ -6,9 +6,12 @@ from typing import Any
 
 from google import genai
 from google.genai import types
-from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD, WebRTCConnectionMethod
+from unitree_webrtc_connect.constants import (
+    RTC_TOPIC,
+    SPORT_CMD,
+    WebRTCConnectionMethod,
+)
 from unitree_webrtc_connect.webrtc_driver import UnitreeWebRTCConnection
-
 
 DEFAULT_MODEL = "gemini-live-2.5-flash-preview"
 MAX_SPEED = 0.6
@@ -26,7 +29,9 @@ class RobotConfig:
 
     @classmethod
     def from_env(cls) -> "RobotConfig":
-        method_name = os.environ.get("ROBOT_CONNECTION_METHOD", "local_sta").strip().lower()
+        method_name = (
+            os.environ.get("ROBOT_CONNECTION_METHOD", "local_sta").strip().lower()
+        )
         method_map = {
             "local_ap": WebRTCConnectionMethod.LocalAP,
             "local_sta": WebRTCConnectionMethod.LocalSTA,
@@ -62,7 +67,10 @@ class RobotController:
 
     async def connect(self) -> dict[str, Any]:
         if self._config.dry_run:
-            return {"ok": True, "message": "Dry run enabled. Pretending the robot is connected."}
+            return {
+                "ok": True,
+                "message": "Dry run enabled. Pretending the robot is connected.",
+            }
 
         if self.connected:
             return {"ok": True, "message": "Robot is already connected."}
@@ -80,7 +88,10 @@ class RobotController:
 
     async def disconnect(self) -> dict[str, Any]:
         if self._config.dry_run:
-            return {"ok": True, "message": "Dry run enabled. Pretending the robot is disconnected."}
+            return {
+                "ok": True,
+                "message": "Dry run enabled. Pretending the robot is disconnected.",
+            }
 
         if not self._conn:
             return {"ok": True, "message": "Robot is already disconnected."}
@@ -139,16 +150,24 @@ class RobotController:
             await self._stop_motion()
             return {"ok": True, "message": "Robot stop command sent."}
         if command == "move_forward":
-            await self._move_for_duration(x=speed, y=0.0, z=0.0, duration_seconds=duration_seconds)
+            await self._move_for_duration(
+                x=speed, y=0.0, z=0.0, duration_seconds=duration_seconds
+            )
             return {"ok": True, "message": "Robot moved forward."}
         if command == "move_backward":
-            await self._move_for_duration(x=-speed, y=0.0, z=0.0, duration_seconds=duration_seconds)
+            await self._move_for_duration(
+                x=-speed, y=0.0, z=0.0, duration_seconds=duration_seconds
+            )
             return {"ok": True, "message": "Robot moved backward."}
         if command == "turn_left":
-            await self._move_for_duration(x=0.0, y=0.0, z=speed, duration_seconds=duration_seconds)
+            await self._move_for_duration(
+                x=0.0, y=0.0, z=speed, duration_seconds=duration_seconds
+            )
             return {"ok": True, "message": "Robot turned left."}
         if command == "turn_right":
-            await self._move_for_duration(x=0.0, y=0.0, z=-speed, duration_seconds=duration_seconds)
+            await self._move_for_duration(
+                x=0.0, y=0.0, z=-speed, duration_seconds=duration_seconds
+            )
             return {"ok": True, "message": "Robot turned right."}
 
         raise ValueError(f"Unsupported command: {command}")
@@ -196,7 +215,9 @@ class RobotController:
     async def _publish_sport(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._publish_request(RTC_TOPIC["SPORT_MOD"], payload)
 
-    async def _publish_request(self, topic: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _publish_request(
+        self, topic: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         if not self._conn:
             raise RuntimeError("Robot connection is not initialized.")
         return await self._conn.datachannel.pub_sub.publish_request_new(topic, payload)
@@ -344,7 +365,9 @@ async def repl() -> None:
     controller = RobotController(robot_config)
     client = genai.Client(api_key=api_key)
 
-    async with client.aio.live.connect(model=model, config=build_live_config()) as session:
+    async with client.aio.live.connect(
+        model=model, config=build_live_config()
+    ) as session:
         print(f"Gemini Live session started with model: {model}")
         print(
             "Type a plain request such as 'connect to the robot and say hello' "

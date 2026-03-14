@@ -40,6 +40,18 @@ Connection methods:
 uv run python 'main.py'
 ```
 
+Direct robot-only sit test:
+
+```sh
+uv run python 'sit_down_test.py'
+```
+
+Optional image output path for that script:
+
+```sh
+export ROBOT_IMAGE_PATH='robot_camera_capture.ppm'
+```
+
 Example prompts:
 
 - `connect to the robot and say hello`
